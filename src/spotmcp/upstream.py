@@ -103,6 +103,8 @@ class UpstreamClient:
         verify: bool | ssl.SSLContext = settings.upstream_verify_tls
         if settings.upstream_verify_tls and settings.upstream_ca_bundle:
             verify = ssl.create_default_context(cafile=settings.upstream_ca_bundle)
+        # A client passed in is owned by the caller and is not closed by aclose().
+        self._owns_http = http is None
         self._http = http or httpx.AsyncClient(
             base_url=str(settings.upstream_base_url).rstrip("/"),
             verify=verify,
@@ -131,7 +133,8 @@ class UpstreamClient:
             )
 
     async def aclose(self) -> None:
-        await self._http.aclose()
+        if self._owns_http:
+            await self._http.aclose()
 
     async def _auth_headers(self) -> dict[str, str]:
         s = self._settings

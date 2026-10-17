@@ -100,6 +100,8 @@ class FakeUpstream:
                 Route("/api/saved-queries/{query_id}", self.get_query, methods=["GET"]),
                 Route("/api/saved-queries/{query_id}/execute", self.execute, methods=["POST"]),
                 Route("/api/health", self.health, methods=["GET"]),
+                Route("/api/boom/{rest:path}", self.boom, methods=["GET", "POST"]),
+                Route("/api/huge/{rest:path}", self.huge, methods=["GET", "POST"]),
                 Route("/api/oauth/token", self.token, methods=["POST"]),
             ]
         )
@@ -124,7 +126,7 @@ class FakeUpstream:
             return JSONResponse({"error": "nope"}, status_code=404)
         if query_id == "slow-report":
             try:
-                await asyncio.sleep(self.slow_seconds)
+                await asyncio.sleep(float(body.get("parameters", {}).get("delay", self.slow_seconds)))
             except asyncio.CancelledError:
                 self.cancelled.set()
                 raise
@@ -133,6 +135,14 @@ class FakeUpstream:
             return JSONResponse({"columns": ["n"], "rows": [{"n": i} for i in range(2500)]})
         region = body.get("parameters", {}).get("region", "all")
         return JSONResponse({"columns": ["region", "total"], "rows": [{"region": region, "total": 42}]})
+
+    async def boom(self, request: Request) -> Response:
+        await self._record(request)
+        return JSONResponse({"error": "internal-secret-detail"}, status_code=500)
+
+    async def huge(self, request: Request) -> Response:
+        await self._record(request)
+        return JSONResponse({"rows": ["x" * 1000] * 100})
 
     async def health(self, request: Request) -> Response:
         await self._record(request)
@@ -221,6 +231,7 @@ class HarnessContext:
             transport=httpx.ASGITransport(app=self.app), base_url="https://spotmcp.example.com"
         )
         self._idp_http = idp_http
+        self._upstream_http = upstream_http
         return Harness(self.app, self.http, self.idp, self.upstream)
 
     async def __aexit__(self, *exc: object) -> None:
@@ -228,6 +239,7 @@ class HarnessContext:
         self._stop.set()
         await self._lifespan_task
         await self._idp_http.aclose()
+        await self._upstream_http.aclose()
 
 
 @pytest.fixture
