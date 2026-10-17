@@ -84,6 +84,18 @@ All settings are environment variables prefixed `SPOTMCP_` (a `.env` file is als
 | `SPOTMCP_OAUTH_AUDIENCE` | `api://spotmcp` |
 | `SPOTMCP_UPSTREAM_BASE_URL` | `https://internal.example.com/api` |
 
+Limits (all optional):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SPOTMCP_RATE_LIMIT_PER_MINUTE` | `60` | Sustained requests per minute per OAuth client |
+| `SPOTMCP_RATE_LIMIT_BURST` | `10` | Bucket size (requests allowed back-to-back) |
+| `SPOTMCP_RATE_LIMIT_OVERRIDES` | _(none)_ | Per-client requests/minute, e.g. `svc-a=240,svc-b=10` |
+| `SPOTMCP_MAX_ROWS` | `1000` | Max rows returned per `run_saved_query` call |
+| `SPOTMCP_MAX_RESPONSE_BYTES` | `5242880` | Max upstream response size |
+| `SPOTMCP_QUERY_DEFAULT_TIMEOUT_SECONDS` | `30` | Deadline when the caller doesn't specify one |
+| `SPOTMCP_QUERY_MAX_TIMEOUT_SECONDS` | `120` | Upper bound on any requested deadline |
+
 The upstream endpoints default to these, and you can change them to match your API:
 
 | Purpose | Default | Variable |

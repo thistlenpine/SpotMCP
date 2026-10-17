@@ -65,3 +65,18 @@ def test_invalid_settings(make_settings: Callable[..., Settings], overrides: dic
 def test_secrets_not_in_repr(make_settings: Callable[..., Settings]) -> None:
     s = make_settings(upstream_auth_mode="static_bearer", upstream_bearer_token="super-secret")
     assert "super-secret" not in repr(s)
+
+
+def test_limits_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in {
+        "SPOTMCP_RESOURCE_URL": "https://spot.example.com/mcp",
+        "SPOTMCP_OAUTH_ISSUER": "https://idp.example.com",
+        "SPOTMCP_OAUTH_AUDIENCE": "api://spot",
+        "SPOTMCP_UPSTREAM_BASE_URL": "https://internal/api",
+        "SPOTMCP_RATE_LIMIT_PER_MINUTE": "300",
+        "SPOTMCP_RATE_LIMIT_BURST": "50",
+        "SPOTMCP_MAX_ROWS": "5000",
+    }.items():
+        monkeypatch.setenv(key, value)
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert (s.rate_limit_per_minute, s.rate_limit_burst, s.max_rows) == (300, 50, 5000)

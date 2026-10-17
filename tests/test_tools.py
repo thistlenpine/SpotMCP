@@ -234,3 +234,12 @@ async def test_post_mode_allows_nested_parameters(harness: Harness) -> None:
         harness, "run_saved_query", {"query_id": "sales-by-region", "parameters": {"filter": {"region": "x"}}}
     )
     assert not result["isError"]
+
+
+async def test_max_rows_is_configurable(
+    make_settings: Callable[..., Settings], idp: FakeIdP, upstream: FakeUpstream
+) -> None:
+    async with HarnessContext(make_settings(max_rows=25), idp, upstream) as h:
+        content = (await call_tool(h, "run_saved_query", {"query_id": "big-table"}))["structuredContent"]
+        assert content["truncated"] is True
+        assert len(content["result"]["rows"]) == 25
