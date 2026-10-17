@@ -81,3 +81,12 @@ def test_limits_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(key, value)
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert (s.rate_limit_per_minute, s.rate_limit_burst, s.max_rows) == (300, 50, 5000)
+
+
+def test_server_identity_defaults_and_validation(make_settings: Any) -> None:
+    s = make_settings()
+    assert (s.server_name, s.server_title) == ("spotmcp", "SpotMCP")
+    with pytest.raises(ValidationError):
+        make_settings(server_name="")
+    with pytest.raises(ValidationError):
+        make_settings(server_title="")

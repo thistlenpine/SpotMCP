@@ -145,6 +145,9 @@ Limits (all optional):
 | `SPOTMCP_MAX_RESPONSE_BYTES` | `5242880` | Max upstream response size |
 | `SPOTMCP_MAX_CONCURRENT_QUERIES_PER_CLIENT` | `4` | In-flight query executions per OAuth client |
 | `SPOTMCP_MAX_CONCURRENT_QUERIES` | `20` | In-flight query executions server-wide |
+
+Server identity (optional): `SPOTMCP_SERVER_NAME` (default `spotmcp`) and `SPOTMCP_SERVER_TITLE` (default
+`SpotMCP`) set the `serverInfo.name` and `serverInfo.title` reported to MCP clients.
 | `SPOTMCP_QUERY_DEFAULT_TIMEOUT_SECONDS` | `30` | Deadline when the caller doesn't specify one |
 | `SPOTMCP_QUERY_MAX_TIMEOUT_SECONDS` | `120` | Upper bound on any requested deadline |
 

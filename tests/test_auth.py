@@ -290,3 +290,13 @@ async def test_unexpected_decode_errors_reject_instead_of_crashing(
 
     monkeypatch.setattr(jwt, "decode", explode)
     assert await verifier.verify_token(idp.token()) is None
+
+
+async def test_server_name_and_title_are_configurable(
+    make_settings: Callable[..., Settings], idp: FakeIdP, upstream: Any
+) -> None:
+    settings = make_settings(server_name="acme-queries", server_title="Acme Saved Queries")
+    async with HarnessContext(settings, idp, upstream) as h:
+        response = await h.http.post("/mcp", json=INIT, headers={**MCP_HEADERS, **h.auth()})
+    info = response.json()["result"]["serverInfo"]
+    assert (info["name"], info["title"]) == ("acme-queries", "Acme Saved Queries")

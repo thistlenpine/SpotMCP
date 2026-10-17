@@ -72,8 +72,8 @@ def create_app(
     upstream = UpstreamClient(settings, http=upstream_http)
 
     server: MCPServer = MCPServer(
-        name="spotmcp",
-        title="SpotMCP",
+        name=settings.server_name,
+        title=settings.server_title,
         version=__version__,
         instructions=INSTRUCTIONS,
         token_verifier=verifier,

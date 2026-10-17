@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     # Accepted Host headers (DNS-rebinding protection). Empty disables the check, e.g. behind a proxy.
     allowed_hosts: CsvList = Field(default_factory=list)
     log_level: str = "INFO"
+    # Identity this server reports to MCP clients (serverInfo.name / serverInfo.title).
+    server_name: str = Field(default="spotmcp", min_length=1, max_length=128)
+    server_title: str = Field(default="SpotMCP", min_length=1, max_length=256)
     # Maximum size of an incoming MCP request body.
     max_request_body_bytes: int = Field(default=256 * 1024, ge=1024)
     # Permit plain-http IdP/upstream/resource URLs to non-local hosts. Development only.
