@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -22,6 +24,7 @@ from spotmcp.upstream import (
 )
 
 audit = logging.getLogger("spotmcp.audit")
+logger = logging.getLogger(__name__)
 
 READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
@@ -79,22 +82,26 @@ def _check_parameters(parameters: dict[str, Any], *, allow_nested: bool) -> None
 
 
 def register_tools(server: MCPServer, settings: Settings, upstream: UpstreamClient) -> None:
+    # Empty only when SPOTMCP_ALLOW_ANY_QUERY is set (enforced by Settings).
     allowed = set(settings.allowed_query_ids)
+    id_field = settings.query_id_field
+    in_flight: dict[str, int] = {}
 
-    def check_id(query_id: str) -> str:
+    def check_id(tool: str, query_id: str, started: float) -> None:
+        """Validate and authorise a query ID; rejections are audited before raising."""
         try:
             validate_query_id(query_id)
         except ValueError as exc:
+            _audit(tool, "invalid_id", started, query_id=query_id[:128])
             raise ToolError(str(exc)) from exc
         if allowed and query_id not in allowed:
+            _audit(tool, "denied", started, query_id=query_id)
             raise ToolError(f"saved query {query_id!r} is not available")
-        return query_id
 
     def filter_listing(listing: Any) -> Any:
         if not allowed:
             return listing
         items = listing
-        key = None
         if isinstance(listing, dict):
             key = next(
                 (k for k in ("queries", "items", "data", "results") if isinstance(listing.get(k), list)), None
@@ -102,9 +109,26 @@ def register_tools(server: MCPServer, settings: Settings, upstream: UpstreamClie
             items = listing[key] if key else None
         if not isinstance(items, list):
             # Unrecognised shape: fail closed rather than reveal queries outside the allow-list.
+            logger.warning("unrecognised upstream listing shape; returning no queries")
             return []
-        kept = [q for q in items if isinstance(q, dict) and str(q.get("id")) in allowed]
-        return {**listing, key: kept} if key else kept
+        # Only the filtered items are returned: sibling metadata such as totals or pagination cursors
+        # would reveal queries outside the allow-list.
+        return [q for q in items if isinstance(q, dict) and str(q.get(id_field)) in allowed]
+
+    @contextlib.contextmanager
+    def client_slot(started: float, query_id: str) -> Iterator[None]:
+        client = _caller()
+        limit = settings.max_concurrent_queries_per_client
+        if in_flight.get(client, 0) >= limit:
+            _audit("run_saved_query", "throttled", started, query_id=query_id)
+            raise ToolError(f"too many concurrent queries for this client (max {limit})")
+        in_flight[client] = in_flight.get(client, 0) + 1
+        try:
+            yield
+        finally:
+            in_flight[client] -= 1
+            if not in_flight[client]:
+                del in_flight[client]
 
     @server.tool(
         title="List saved queries",
@@ -131,7 +155,7 @@ def register_tools(server: MCPServer, settings: Settings, upstream: UpstreamClie
         query_id: Annotated[str, Field(description="ID of the saved query")],
     ) -> dict[str, Any]:
         started = time.monotonic()
-        check_id(query_id)
+        check_id("get_saved_query", query_id, started)
         try:
             query = await upstream.get_query(query_id)
         except UpstreamNotFoundError as exc:
@@ -161,12 +185,17 @@ def register_tools(server: MCPServer, settings: Settings, upstream: UpstreamClie
         ] = None,
     ) -> dict[str, Any]:
         started = time.monotonic()
-        check_id(query_id)
+        check_id("run_saved_query", query_id, started)
         params = parameters or {}
-        _check_parameters(params, allow_nested=settings.upstream_run_method == "POST")
+        try:
+            _check_parameters(params, allow_nested=settings.upstream_run_method == "POST")
+        except ToolError:
+            _audit("run_saved_query", "invalid_parameters", started, query_id=query_id)
+            raise
         timeout = effective_timeout(settings, timeout_seconds)
         try:
-            result = await upstream.run_query(query_id, params, timeout=timeout)
+            with client_slot(started, query_id):
+                result = await upstream.run_query(query_id, params, timeout=timeout)
         except UpstreamTimeoutError as exc:
             _audit("run_saved_query", "timeout", started, query_id=query_id, timeout_s=timeout)
             raise ToolError(f"saved query {query_id!r} timed out after {timeout:g}s") from exc
@@ -177,6 +206,12 @@ def register_tools(server: MCPServer, settings: Settings, upstream: UpstreamClie
             _audit("run_saved_query", "error", started, query_id=query_id, error=str(exc))
             raise ToolError(str(exc)) from exc
         result, row_count, truncated = truncate_rows(result, settings.rows_field, settings.max_rows)
+        if row_count is None and result is not None:
+            logger.warning(
+                "query %s: no row array found (expected a list or %r); row limit not applied",
+                query_id,
+                settings.rows_field,
+            )
         duration_ms = round((time.monotonic() - started) * 1000, 1)
         _audit("run_saved_query", "ok", started, query_id=query_id, row_count=row_count, truncated=truncated)
         return {
@@ -184,6 +219,7 @@ def register_tools(server: MCPServer, settings: Settings, upstream: UpstreamClie
             "duration_ms": duration_ms,
             "row_count": row_count,
             "truncated": truncated,
+            "row_limit_applied": row_count is not None,
             "result": result,
         }
 

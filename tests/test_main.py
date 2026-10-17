@@ -16,6 +16,7 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SPOTMCP_OAUTH_AUDIENCE", "api://spot")
     monkeypatch.setenv("SPOTMCP_UPSTREAM_BASE_URL", "https://internal/api")
     monkeypatch.setenv("SPOTMCP_PORT", "9999")
+    monkeypatch.setenv("SPOTMCP_ALLOWED_QUERY_IDS", "q1")
     calls: dict[str, Any] = {}
     monkeypatch.setattr(main_module.uvicorn, "run", lambda app, **kw: calls.update(app=app, **kw))
     root = logging.getLogger()

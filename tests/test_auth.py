@@ -18,6 +18,7 @@ def make_verifier(idp: FakeIdP, **kwargs: Any) -> JWTTokenVerifier:
         httpx.AsyncClient(transport=httpx.MockTransport(idp.handler)),
         issuer=ISSUER,
         min_refresh_seconds=kwargs.pop("min_refresh_seconds", 30),
+        **({"clock": kwargs.pop("clock")} if "clock" in kwargs else {}),
     )
     return JWTTokenVerifier(
         jwks,
@@ -120,14 +121,15 @@ async def test_missing_kid_is_rejected(idp: FakeIdP) -> None:
 
 
 async def test_key_rotation_triggers_jwks_refresh(idp: FakeIdP) -> None:
-    verifier = make_verifier(idp, min_refresh_seconds=1)
+    now = [1000.0]
+    verifier = make_verifier(idp, min_refresh_seconds=10, clock=lambda: now[0])
     assert await verifier.verify_token(idp.token()) is not None
     new_key = SigningKey("key-2")
     idp.keys.append(new_key)
     # Within min_refresh_seconds an unknown kid does not trigger a refresh...
     assert await verifier.verify_token(idp.token(key=new_key)) is None
     assert idp.jwks_requests == 1
-    verifier._jwks._fetched_at -= 2  # type: ignore[operator]
+    now[0] += 11
     # ...after it, the JWKS is re-fetched and the rotated key is accepted.
     assert await verifier.verify_token(idp.token(key=new_key)) is not None
     assert idp.jwks_requests == 2

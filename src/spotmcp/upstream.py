@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -108,6 +109,9 @@ class UpstreamClient:
             follow_redirects=False,
             timeout=httpx.Timeout(settings.query_max_timeout_seconds),
         )
+        if not settings.upstream_verify_tls:
+            logger.warning("TLS certificate verification for the upstream API is DISABLED")
+        self._query_slots = asyncio.Semaphore(settings.max_concurrent_queries)
         self._token_provider: ClientCredentialsTokenProvider | None = None
         if settings.upstream_auth_mode is UpstreamAuthMode.CLIENT_CREDENTIALS:
             assert settings.upstream_token_url and settings.upstream_client_id
@@ -145,6 +149,30 @@ class UpstreamClient:
             return template
         return template.replace("{query_id}", quote(validate_query_id(query_id), safe=""))
 
+    async def _send_once(
+        self, method: str, path: str, *, timeout: float, params: dict[str, Any] | None, body: Any
+    ) -> tuple[int, bytes]:
+        """Send one request and read at most ``max_response_bytes`` of the body."""
+        headers = {"Accept": "application/json", **await self._auth_headers()}
+        request = self._http.build_request(
+            method, path, params=params, json=body, headers=headers, timeout=httpx.Timeout(timeout)
+        )
+        response = await self._http.send(request, stream=True)
+        try:
+            if not 200 <= response.status_code < 300:
+                return response.status_code, b""
+            max_bytes = self._settings.max_response_bytes
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise UpstreamError(f"upstream response exceeded {max_bytes} bytes")
+                chunks.append(chunk)
+            return response.status_code, b"".join(chunks)
+        finally:
+            await response.aclose()
+
     async def _request(
         self,
         method: str,
@@ -153,46 +181,33 @@ class UpstreamClient:
         timeout: float,
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
+        slot: asyncio.Semaphore | None = None,
     ) -> Any:
-        """Issue one request with a hard wall-clock deadline and a response-size cap."""
-        max_bytes = self._settings.max_response_bytes
+        """Issue a request under a hard wall-clock deadline, which also covers waiting for a ``slot``.
+
+        The deadline is enforced on this side: on expiry the HTTP request is cancelled and the connection
+        dropped. Whether the upstream then stops its own work depends on it honouring client disconnects.
+        """
         try:
-            async with asyncio.timeout(timeout):
-                headers = {"Accept": "application/json", **await self._auth_headers()}
-                request = self._http.build_request(
-                    method,
-                    path,
-                    params=params,
-                    json=body,
-                    headers=headers,
-                    timeout=httpx.Timeout(timeout),
-                )
-                response = await self._http.send(request, stream=True)
-                try:
-                    if response.status_code == 401 and self._token_provider:
-                        # Token revoked or rotated upstream: fetch a fresh one on the next call.
-                        self._token_provider.invalidate()
-                    if response.status_code == 404:
-                        raise UpstreamNotFoundError("not found")
-                    if not 200 <= response.status_code < 300:
-                        raise UpstreamError(f"upstream returned HTTP {response.status_code}")
-                    chunks: list[bytes] = []
-                    size = 0
-                    async for chunk in response.aiter_bytes():
-                        size += len(chunk)
-                        if size > max_bytes:
-                            raise UpstreamError(f"upstream response exceeded {max_bytes} bytes")
-                        chunks.append(chunk)
-                finally:
-                    await response.aclose()
+            async with asyncio.timeout(timeout), slot or contextlib.nullcontext():
+                status, raw = await self._send_once(method, path, timeout=timeout, params=params, body=body)
+                if status == 401 and self._token_provider:
+                    # Our M2M token was revoked or rotated upstream: retry once with a fresh one.
+                    self._token_provider.invalidate()
+                    status, raw = await self._send_once(
+                        method, path, timeout=timeout, params=params, body=body
+                    )
         except TimeoutError as exc:
             raise UpstreamTimeoutError(f"upstream call timed out after {timeout:g}s") from exc
         except httpx.TimeoutException as exc:
             raise UpstreamTimeoutError(f"upstream call timed out after {timeout:g}s") from exc
         except httpx.HTTPError as exc:
-            logger.warning("upstream transport error: %s", exc)
+            logger.warning("upstream transport error: %s", type(exc).__name__)
             raise UpstreamError("upstream request failed") from exc
-        raw = b"".join(chunks)
+        if status == 404:
+            raise UpstreamNotFoundError("not found")
+        if not 200 <= status < 300:
+            raise UpstreamError(f"upstream returned HTTP {status}")
         if not raw:
             return None
         try:
@@ -218,8 +233,12 @@ class UpstreamClient:
         s = self._settings
         path = self._path(s.upstream_run_path, query_id)
         if s.upstream_run_method == "GET":
-            return await self._request("GET", path, timeout=timeout, params=parameters)
-        return await self._request("POST", path, timeout=timeout, body={"parameters": parameters})
+            return await self._request(
+                "GET", path, timeout=timeout, params=parameters, slot=self._query_slots
+            )
+        return await self._request(
+            "POST", path, timeout=timeout, body={"parameters": parameters}, slot=self._query_slots
+        )
 
     async def health(self) -> Any:
         return await self._request(

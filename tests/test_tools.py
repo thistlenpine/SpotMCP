@@ -134,7 +134,7 @@ async def test_allow_list_restricts_queries(
     settings = make_settings(allowed_query_ids="sales-by-region")
     async with HarnessContext(settings, idp, upstream) as h:
         listing = await call_tool(h, "list_saved_queries")
-        assert [q["id"] for q in listing["structuredContent"]["queries"]["queries"]] == ["sales-by-region"]
+        assert [q["id"] for q in listing["structuredContent"]["queries"]] == ["sales-by-region"]
         denied = await call_tool(h, "run_saved_query", {"query_id": "big-table"})
         assert "not available" in error_text(denied)
         denied = await call_tool(h, "get_saved_query", {"query_id": "big-table"})
@@ -207,7 +207,8 @@ def test_truncate_rows_shapes() -> None:
     ("listing", "expected"),
     [
         ([{"id": "a"}, {"id": "b"}], [{"id": "a"}]),
-        ({"items": [{"id": "a"}, {"id": "b"}], "total": 2}, {"items": [{"id": "a"}], "total": 2}),
+        # Sibling metadata (counts, cursors) is dropped: it would reveal queries outside the allow-list.
+        ({"items": [{"id": "a"}, {"id": "b"}], "total": 2}, [{"id": "a"}]),
         ({"weird": "shape", "secret": "b"}, []),
         ("text", []),
     ],

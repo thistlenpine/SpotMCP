@@ -226,3 +226,34 @@ async def test_upstream_401_invalidates_cached_token(make_settings: Callable[...
     await client.health()
     assert [r.url.path for r in seen].count("/token") == 2
     assert seen[-1].headers["authorization"] == "Bearer tok-3"
+
+
+async def test_upstream_401_retried_once_with_fresh_token(make_settings: Callable[..., Settings]) -> None:
+    seen: list[httpx.Request] = []
+    statuses = iter([401, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/token":
+            return httpx.Response(200, json={"access_token": f"tok-{len(seen)}", "expires_in": 3600})
+        return httpx.Response(next(statuses), json={"ok": True})
+
+    s = make_settings(
+        upstream_auth_mode="client_credentials",
+        upstream_token_url="https://idp.example.com/token",
+        upstream_client_id="spotmcp",
+        upstream_client_secret="shh",
+    )
+    assert await client_for(s, handler).health() == {"ok": True}
+    paths = [r.url.path for r in seen]
+    assert paths == ["/token", "/api/health", "/token", "/api/health"]
+    assert seen[1].headers["authorization"] != seen[3].headers["authorization"]
+
+
+async def test_verify_tls_disabled_warns(
+    make_settings: Callable[..., Settings], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="spotmcp.upstream")
+    client = UpstreamClient(make_settings(upstream_verify_tls=False))
+    assert any("DISABLED" in r.getMessage() for r in caplog.records)
+    await client.aclose()

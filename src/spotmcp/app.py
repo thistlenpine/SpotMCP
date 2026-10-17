@@ -11,12 +11,14 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
+from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from spotmcp import __version__
 from spotmcp.auth import JWKSCache, JWTTokenVerifier
 from spotmcp.config import Settings
+from spotmcp.logging_config import quiet_transport_loggers
 from spotmcp.ratelimit import RateLimiter, RateLimitMiddleware
 from spotmcp.tools import register_tools
 from spotmcp.upstream import UpstreamClient
@@ -27,6 +29,21 @@ INSTRUCTIONS = (
 )
 
 
+def _check_middleware_order(app: Starlette) -> None:
+    """Fail fast if an SDK/Starlette change would make the rate limiter run before authentication.
+
+    Rate limiting is keyed on the authenticated client, so it must sit inside AuthenticationMiddleware, and
+    the middleware stack must not have been built yet (Starlette builds it lazily on first request).
+    """
+    classes: list[object] = [m.cls for m in app.user_middleware]
+    if (
+        app.middleware_stack is not None
+        or AuthenticationMiddleware not in classes
+        or classes.index(AuthenticationMiddleware) > classes.index(RateLimitMiddleware)
+    ):
+        raise RuntimeError("unexpected middleware layout: rate limiting would not run after authentication")
+
+
 def create_app(
     settings: Settings,
     *,
@@ -34,6 +51,7 @@ def create_app(
     idp_http: httpx.AsyncClient | None = None,
     limiter: RateLimiter | None = None,
 ) -> Starlette:
+    quiet_transport_loggers()
     idp_client = idp_http or httpx.AsyncClient(timeout=httpx.Timeout(10.0), follow_redirects=False)
     jwks = JWKSCache(
         idp_client,
@@ -41,6 +59,7 @@ def create_app(
         jwks_url=str(settings.oauth_jwks_url) if settings.oauth_jwks_url else None,
         cache_seconds=settings.oauth_jwks_cache_seconds,
         min_refresh_seconds=settings.oauth_jwks_min_refresh_seconds,
+        allow_insecure_http=settings.allow_insecure_http,
     )
     verifier = JWTTokenVerifier(
         jwks,
@@ -88,6 +107,7 @@ def create_app(
         json_response=True,
         transport_security=security,
         host=settings.host,
+        max_request_body_size=settings.max_request_body_bytes,
     )
     # Appended last => innermost, i.e. after the SDK's AuthenticationMiddleware has set scope["user"],
     # so requests are limited per authenticated OAuth client.
@@ -104,6 +124,8 @@ def create_app(
             path=settings.mcp_path,
         )
     )
+
+    _check_middleware_order(app)
 
     sdk_lifespan = app.router.lifespan_context
 

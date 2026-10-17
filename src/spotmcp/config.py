@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from typing import Annotated, Self
+from urllib.parse import urlparse
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def is_https_or_local(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme == "https" or (parsed.scheme == "http" and parsed.hostname in LOCAL_HOSTS)
+
+
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _split_csv(value: object) -> object:
@@ -37,6 +47,10 @@ class Settings(BaseSettings):
     # Accepted Host headers (DNS-rebinding protection). Empty disables the check, e.g. behind a proxy.
     allowed_hosts: CsvList = Field(default_factory=list)
     log_level: str = "INFO"
+    # Maximum size of an incoming MCP request body.
+    max_request_body_bytes: int = Field(default=256 * 1024, ge=1024)
+    # Permit plain-http IdP/upstream/resource URLs to non-local hosts. Development only.
+    allow_insecure_http: bool = False
 
     # --- OAuth / IdP (incoming requests) ------------------------------------
     # Compared exactly against the token's `iss` claim (mind trailing slashes).
@@ -89,8 +103,16 @@ class Settings(BaseSettings):
     max_response_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
     # Key in the upstream run response holding the result rows (used for row truncation).
     rows_field: str = "rows"
-    # Optional allow-list of query IDs. Empty allows any ID the upstream exposes.
+    # Field identifying a query in the upstream listing (used to filter the listing by the allow-list).
+    query_id_field: str = "id"
+    # Allow-list of saved query IDs callers may describe/run. Only list queries that are read-only upstream.
+    # Required unless allow_any_query is true.
     allowed_query_ids: CsvList = Field(default_factory=list)
+    # Explicit opt-out of the allow-list: permit every query the upstream exposes.
+    allow_any_query: bool = False
+    # Concurrency caps on in-flight saved-query executions (server-wide and per OAuth client).
+    max_concurrent_queries: int = Field(default=20, ge=1)
+    max_concurrent_queries_per_client: int = Field(default=4, ge=1)
 
     @field_validator(
         "allowed_hosts",
@@ -115,8 +137,20 @@ class Settings(BaseSettings):
                 client, sep, rate = item.rpartition("=")
                 if not sep or not client:
                     raise ValueError(f"invalid rate limit override {item!r}; expected client=rate")
-                result[client.strip()] = float(rate)
+                try:
+                    result[client.strip()] = float(rate)
+                except ValueError:
+                    raise ValueError(f"invalid rate in override {item!r}") from None
             return result
+        return value
+
+    @field_validator("rate_limit_overrides", mode="after")
+    @classmethod
+    def _overrides_positive(cls, value: dict[str, float]) -> dict[str, float]:
+        # nan would never drain the bucket (silent bypass); 0 / negative would lock the client out forever.
+        for client, per_minute in value.items():
+            if not math.isfinite(per_minute) or per_minute <= 0:
+                raise ValueError(f"rate limit override for {client!r} must be a positive finite number")
         return value
 
     @field_validator("oauth_algorithms")
@@ -161,6 +195,24 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check(self) -> Self:
+        if not self.allowed_query_ids and not self.allow_any_query:
+            raise ValueError(
+                "SPOTMCP_ALLOWED_QUERY_IDS is required (list the read-only saved queries callers may run); "
+                "set SPOTMCP_ALLOW_ANY_QUERY=true to deliberately expose every upstream query"
+            )
+        if not self.allow_insecure_http:
+            urls = {
+                "resource_url": str(self.resource_url),
+                "oauth_issuer": self.oauth_issuer,
+                "oauth_jwks_url": str(self.oauth_jwks_url) if self.oauth_jwks_url else None,
+                "upstream_base_url": str(self.upstream_base_url),
+                "upstream_token_url": str(self.upstream_token_url) if self.upstream_token_url else None,
+            }
+            for name, url in urls.items():
+                if url and not is_https_or_local(url):
+                    raise ValueError(
+                        f"{name} must use https (set SPOTMCP_ALLOW_INSECURE_HTTP=true for local development)"
+                    )
         if self.query_default_timeout_seconds > self.query_max_timeout_seconds:
             raise ValueError("query_default_timeout_seconds must not exceed query_max_timeout_seconds")
         mode = self.upstream_auth_mode

@@ -76,6 +76,7 @@ def test_limits_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SPOTMCP_RATE_LIMIT_PER_MINUTE": "300",
         "SPOTMCP_RATE_LIMIT_BURST": "50",
         "SPOTMCP_MAX_ROWS": "5000",
+        "SPOTMCP_ALLOW_ANY_QUERY": "true",
     }.items():
         monkeypatch.setenv(key, value)
     s = Settings(_env_file=None)  # type: ignore[call-arg]

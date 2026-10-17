@@ -167,6 +167,7 @@ def make_settings() -> Callable[..., Settings]:
             "rate_limit_burst": 100,
             "query_default_timeout_seconds": 2,
             "query_max_timeout_seconds": 3,
+            "allow_any_query": True,
         }
         values.update(overrides)
         return Settings(_env_file=None, **values)  # type: ignore[call-arg]

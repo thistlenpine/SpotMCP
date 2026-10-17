@@ -25,9 +25,20 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+# Transport loggers that log full request URLs (query strings included) at INFO/DEBUG. In GET mode those
+# carry caller-supplied saved-query parameters, which must never reach the logs.
+_URL_LOGGERS = ("httpx", "httpcore")
+
+
+def quiet_transport_loggers() -> None:
+    for name in _URL_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
+    quiet_transport_loggers()
