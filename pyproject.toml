@@ -1,0 +1,69 @@
+[project]
+name = "spotmcp"
+version = "0.1.0"
+description = "OAuth-protected, rate-limited, read-only MCP server for executing saved queries on an internal REST API"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3,<3",
+    "httpx>=0.28,<1",
+    "pyjwt[crypto]>=2.10,<3",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.6,<3",
+    "starlette>=0.46",
+    "uvicorn>=0.34",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx2",
+    "mypy>=1.13",
+    "pytest>=8",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6",
+    "respx>=0.22",
+    "ruff>=0.8",
+]
+
+[project.scripts]
+spotmcp = "spotmcp.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spotmcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
+
+[tool.coverage.run]
+source = ["spotmcp"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "SIM"]
+# ASYNC109: upstream calls take an explicit `timeout` that is enforced inside with asyncio.timeout().
+ignore = ["S101", "ASYNC109"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S104", "S105", "S106", "S311", "ASYNC110"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["spotmcp"]
