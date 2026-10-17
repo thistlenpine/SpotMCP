@@ -34,11 +34,16 @@ for MCP clients, **not a safety control**. SpotMCP cannot know whether a saved q
 is a `POST .../execute` made with SpotMCP's own upstream credential, and the upstream never sees the
 caller's identity. Read-only behaviour is enforced by:
 
-1. **A mandatory allow-list.** `SPOTMCP_ALLOWED_QUERY_IDS` must list the saved queries callers may describe
+1. **The upstream `read_only` flag.** Every execution is sent with `read_only=true` (in the POST body, or as a
+   query parameter in GET mode), and the internal API refuses anything that would write. The flag is set
+   by the server: callers cannot pass or override it (a parameter with that name is rejected and audited).
+   Operators can rename the field with `SPOTMCP_UPSTREAM_READ_ONLY_FIELD`. Setting
+   `SPOTMCP_UPSTREAM_READ_ONLY=false` turns the protection off and logs a warning at startup.
+2. **A mandatory allow-list.** `SPOTMCP_ALLOWED_QUERY_IDS` must list the saved queries callers may describe
    and run, and the server refuses to start without it. **Only list queries that are read-only upstream.**
    Exposing every upstream query takes an explicit `SPOTMCP_ALLOW_ANY_QUERY=true`, which is only safe if
    the upstream itself guarantees that every query it exposes is read-only.
-2. **A least-privilege upstream credential.** Give SpotMCP's upstream identity read-only access on the
+3. **A least-privilege upstream credential.** Give SpotMCP's upstream identity read-only access on the
    internal API.
 
 Any client holding a valid token can run any allow-listed query. To restrict which clients may connect at
@@ -149,7 +154,7 @@ The upstream endpoints default to these, and you can change them to match your A
 | --- | --- | --- |
 | List | `GET /saved-queries` | `SPOTMCP_UPSTREAM_LIST_PATH` |
 | Describe | `GET /saved-queries/{query_id}` | `SPOTMCP_UPSTREAM_GET_PATH` |
-| Run | `POST /saved-queries/{query_id}/execute` with body `{"parameters": {...}}` | `SPOTMCP_UPSTREAM_RUN_PATH`, `SPOTMCP_UPSTREAM_RUN_METHOD` (`POST`/`GET`; `GET` sends parameters as query string) |
+| Run | `POST /saved-queries/{query_id}/execute` with body `{"parameters": {...}, "read_only": true}` | `SPOTMCP_UPSTREAM_RUN_PATH`, `SPOTMCP_UPSTREAM_RUN_METHOD` (`POST`/`GET`; `GET` sends parameters and `read_only=true` as query string) |
 | Health | `GET /health` | `SPOTMCP_UPSTREAM_HEALTH_PATH` |
 
 ## Running

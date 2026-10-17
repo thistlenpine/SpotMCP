@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -164,6 +165,7 @@ async def test_get_run_method_uses_query_params(
     assert seen[0].method == "GET"
     assert seen[0].url.path == "/api/q/abc/run"
     assert seen[0].url.params.get_list("ids") == ["1", "2"]
+    assert seen[0].url.params["read_only"] == "true"
 
 
 async def test_query_id_is_url_encoded(
@@ -257,3 +259,25 @@ async def test_verify_tls_disabled_warns(
     client = UpstreamClient(make_settings(upstream_verify_tls=False))
     assert any("DISABLED" in r.getMessage() for r in caplog.records)
     await client.aclose()
+
+
+async def test_read_only_flag_cannot_be_overridden_by_parameters(
+    make_settings: Callable[..., Settings], seen: list[httpx.Request]
+) -> None:
+    # Defence in depth: even if a reserved key slipped past the tool layer, the server's value wins.
+    get = make_settings(upstream_run_method="GET")
+    await client_for(get, recorder(seen)).run_query("q", {"read_only": "false"}, timeout=1)
+    assert seen[-1].url.params.get_list("read_only") == ["true"]
+    post = make_settings()
+    await client_for(post, recorder(seen)).run_query("q", {"read_only": False}, timeout=1)
+    assert json.loads(seen[-1].content)["read_only"] is True
+
+
+async def test_read_only_disabled_sends_false_and_warns(
+    make_settings: Callable[..., Settings], seen: list[httpx.Request], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="spotmcp.upstream")
+    s = make_settings(upstream_read_only=False, upstream_read_only_field="readOnly")
+    await client_for(s, recorder(seen)).run_query("q", {}, timeout=1)
+    assert json.loads(seen[-1].content) == {"parameters": {}, "readOnly": False}
+    assert any("read-only mode is DISABLED" in r.getMessage() for r in caplog.records)

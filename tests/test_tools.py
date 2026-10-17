@@ -61,7 +61,7 @@ async def test_run_saved_query_passes_parameters(harness: Harness) -> None:
     assert content["result"]["rows"] == [{"region": "west", "total": 42}]
     method, path, _, body = harness.upstream.requests[-1]
     assert (method, path) == ("POST", "/api/saved-queries/sales-by-region/execute")
-    assert json.loads(body) == {"parameters": {"region": "west"}}
+    assert json.loads(body) == {"parameters": {"region": "west"}, "read_only": True}
 
 
 async def test_run_unknown_query(harness: Harness) -> None:
@@ -244,3 +244,21 @@ async def test_max_rows_is_configurable(
         content = (await call_tool(h, "run_saved_query", {"query_id": "big-table"}))["structuredContent"]
         assert content["truncated"] is True
         assert len(content["result"]["rows"]) == 25
+
+
+@pytest.mark.parametrize("method", ["POST", "GET"])
+async def test_callers_cannot_set_read_only(
+    make_settings: Callable[..., Settings],
+    idp: FakeIdP,
+    upstream: FakeUpstream,
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+) -> None:
+    caplog.set_level("INFO", logger="spotmcp.audit")
+    async with HarnessContext(make_settings(upstream_run_method=method), idp, upstream) as h:
+        result = await call_tool(
+            h, "run_saved_query", {"query_id": "sales-by-region", "parameters": {"read_only": False}}
+        )
+    assert "reserved" in error_text(result)
+    assert upstream.requests == []
+    assert [r.audit for r in caplog.records][-1]["outcome"] == "invalid_parameters"  # type: ignore[attr-defined]

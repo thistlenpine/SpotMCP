@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     upstream_get_path: str = "/saved-queries/{query_id}"
     upstream_run_path: str = "/saved-queries/{query_id}/execute"
     upstream_run_method: str = "POST"
+    # Sent with every saved-query execution so the upstream refuses anything that would write.
+    # Set by the server, never by MCP callers.
+    upstream_read_only: bool = True
+    upstream_read_only_field: str = Field(default="read_only", min_length=1)
     upstream_health_path: str = "/health"
     upstream_auth_mode: UpstreamAuthMode = UpstreamAuthMode.NONE
     upstream_bearer_token: SecretStr | None = None

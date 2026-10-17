@@ -109,6 +109,11 @@ class UpstreamClient:
             follow_redirects=False,
             timeout=httpx.Timeout(settings.query_max_timeout_seconds),
         )
+        if not settings.upstream_read_only:
+            logger.warning(
+                "upstream read-only mode is DISABLED (%s=false): saved queries may modify data",
+                settings.upstream_read_only_field,
+            )
         if not settings.upstream_verify_tls:
             logger.warning("TLS certificate verification for the upstream API is DISABLED")
         self._query_slots = asyncio.Semaphore(settings.max_concurrent_queries)
@@ -232,13 +237,12 @@ class UpstreamClient:
     async def run_query(self, query_id: str, parameters: dict[str, Any], *, timeout: float) -> Any:
         s = self._settings
         path = self._path(s.upstream_run_path, query_id)
+        # The server's read-only flag is applied last so it always wins over anything in `parameters`.
         if s.upstream_run_method == "GET":
-            return await self._request(
-                "GET", path, timeout=timeout, params=parameters, slot=self._query_slots
-            )
-        return await self._request(
-            "POST", path, timeout=timeout, body={"parameters": parameters}, slot=self._query_slots
-        )
+            params = {**parameters, s.upstream_read_only_field: "true" if s.upstream_read_only else "false"}
+            return await self._request("GET", path, timeout=timeout, params=params, slot=self._query_slots)
+        body = {"parameters": parameters, s.upstream_read_only_field: s.upstream_read_only}
+        return await self._request("POST", path, timeout=timeout, body=body, slot=self._query_slots)
 
     async def health(self) -> Any:
         return await self._request(

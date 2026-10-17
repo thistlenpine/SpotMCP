@@ -71,7 +71,10 @@ def truncate_rows(result: Any, rows_field: str, max_rows: int) -> tuple[Any, int
     return result, None, False
 
 
-def _check_parameters(parameters: dict[str, Any], *, allow_nested: bool) -> None:
+def _check_parameters(parameters: dict[str, Any], *, allow_nested: bool, reserved: str) -> None:
+    if reserved in parameters:
+        # The read-only flag is controlled by the server; callers cannot set or override it.
+        raise ToolError(f"parameter {reserved!r} is reserved")
     for name, value in parameters.items():
         if isinstance(value, _SCALARS):
             continue
@@ -188,7 +191,11 @@ def register_tools(server: MCPServer, settings: Settings, upstream: UpstreamClie
         check_id("run_saved_query", query_id, started)
         params = parameters or {}
         try:
-            _check_parameters(params, allow_nested=settings.upstream_run_method == "POST")
+            _check_parameters(
+                params,
+                allow_nested=settings.upstream_run_method == "POST",
+                reserved=settings.upstream_read_only_field,
+            )
         except ToolError:
             _audit("run_saved_query", "invalid_parameters", started, query_id=query_id)
             raise
